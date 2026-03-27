@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Tulesenger Ultimate FIX</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; height: 100vh; background: #e5ddd5; color: #333; }
+        
+        /* Боковая панель */
+        #sidebar { width: 300px; background: #2c3e50; color: white; display: flex; flex-direction: column; border-right: 2px solid #1a252f; }
+        .user-card { padding: 15px; background: #1a252f; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2c3e50; }
+        .status-dot { width: 10px; height: 10px; background: #2ecc71; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        
+        .menu-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 15px; background: #212f3d; }
+        .menu-btns button { padding: 10px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; font-size: 13px; transition: 0.2s; }
+        .btn-f { background: #3498db; } .btn-f:hover { background: #2980b9; }
+        .btn-g { background: #f39c12; } .btn-g:hover { background: #d35400; }
+
+        #contact-list { flex: 1; overflow-y: auto; }
+        .item { padding: 15px; border-bottom: 1px solid #34495e; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
+        .item:hover { background: #3e5871; }
+        .item.active { background: #2980b9; border-left: 4px solid #fff; }
+        .unread { background: #e74c3c; width: 10px; height: 10px; border-radius: 50%; display: none; }
+
+        /* Окно чата */
+        #chat-main { flex: 1; display: flex; flex-direction: column; background: #f4f7f6; }
+        #chat-header { padding: 15px; background: white; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        
+        /* Панель звонка */
+        #call-ui { padding: 10px 15px; background: #2ecc71; color: white; display: none; justify-content: space-between; align-items: center; font-size: 14px; border-bottom: 1px solid #27ae60; }
+        #call-status { font-weight: bold; }
+        .end-call-btn { background: #e74c3c; border: none; color: white; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+        /* Сообщения */
+        #messages { flex: 1; padding: 25px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; background-image: url('https://www.transparenttextures.com/patterns/az-subtle.png'); }
+        
+        /* ИСПРАВЛЕНО: Стиль пузыря */
+        .m { padding: 10px 15px; border-radius: 12px; max-width: 80%; font-size: 14px; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.1); line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word; }
+        
+        /* ИСПРАВЛЕНО: Ник всегда жирным и с новой строки */
+        .m b { display: block; font-size: 12px; margin-bottom: 5px; color: #2980b9; border-bottom: 1px solid #eee; padding-bottom: 3px; }
+        
+        .m.in { background: white; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .m.out { background: #dcf8c6; align-self: flex-end; border-bottom-right-radius: 2px; }
+
+        /* Поле ввода */
+        #input-area { padding: 15px; background: white; display: flex; border-top: 1px solid #ddd; align-items: center; }
+        #msg-input { flex: 1; padding: 12px 15px; border: 1px solid #ddd; border-radius: 25px; outline: none; font-size: 14px; }
+        #msg-input:focus { border-color: #3498db; }
+        #input-area button { margin-left: 12px; border: none; background: #27ae60; color: white; border-radius: 50%; width: 45px; height: 45px; cursor: pointer; font-size: 20px; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
+        #input-area button:hover { background: #219150; transform: scale(1.05); }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div class="user-card">
+        <span id="display-nick">...</span>
+        <span><div class="status-dot"></div> Online</span>
+    </div>
+    <div class="menu-btns">
+        <button class="btn-f" onclick="addFriend()">+ Друг</button>
+        <button class="btn-g" onclick="addGroup()">+ Группа</button>
+    </div>
+    <div id="contact-list"></div>
+</div>
+
+<div id="chat-main">
+    <div id="chat-header">
+        <b id="header-name">Выберите чат</b>
+        <button id="call-btn" onclick="startCall()" style="display:none; background:#2ecc71; color:white; border:none; padding:8px 18px; border-radius:20px; cursor:pointer; font-weight:bold; font-size:13px;">📞 Звонок</button>
+    </div>
+    
+    <div id="call-ui">
+        <span id="call-status">Звонок...</span>
+        <button class="end-call-btn" onclick="endCall()">Завершить</button>
+    </div>
+    
+    <div id="messages"></div>
+    
+    <div id="input-area">
+        <input type="text" id="msg-input" placeholder="Введите сообщение..." onkeypress="if(event.key==='Enter') send()">
+        <button onclick="send()">➤</button>
+    </div>
+</div>
+
+<audio id="remote-audio" autoplay></audio>
+
+<script>
+    // --- ИНИЦИАЛИЗАЦИЯ И ДАННЫЕ ---
+    const myNick = localStorage.getItem('t_nick') || prompt("Введите ваш ник:") || "User" + Math.floor(Math.random()*100);
+    localStorage.setItem('t_nick', myNick);
+    document.getElementById('display-nick').innerText = "👤 " + myNick;
+
+    let items = JSON.parse(localStorage.getItem('t_items')) || [];
+    let history = JSON.parse(localStorage.getItem('t_history')) || {};
+    let activeId = null;
+    let peerConn = null, localStream = null;
+
+    // Подключаемся к публичному MQTT брокеру (v5 - чтобы не пересекаться)
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+    // --- СЕТЕВАЯ ЛОГИКА (MQTT) ---
+    client.on('connect', () => {
+        // Подписываемся на все чаты при запуске
+        items.forEach(i => client.subscribe("tule/v5/" + i.id));
+    });
+
+    client.on('message', async (topic, msg) => {
+        let data;
+        try {
+            data = JSON.parse(msg.toString());
+        } catch(e) { return; } // Игнорируем битые данные
+        
+        const tId = topic.split('/').pop();
+
+        // 1. Обработка сигналов звонка (WebRTC)
+        if (data.type && data.to === myNick) {
+            if (data.type === 'offer') {
+                if(confirm("Звонит " + data.sender + ". Ответить?")) {
+                    activeId = tId; // Переключаемся на чат звонящего
+                    acceptCall(data.offer, tId, data.sender);
+                }
+            } else if (data.type === 'answer' && peerConn) {
+                await peerConn.setRemoteDescription(new RTCSessionDescription(data.answer));
+                document.getElementById('call-status').innerText = "В разговоре с " + data.sender;
+            } else if (data.type === 'ice' && peerConn) {
+                try { await peerConn.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+            }
+        } 
+        // 2. Обработка обычных сообщений
+        else if (!data.type) {
+            // Сохраняем в историю
+            if (!history[tId]) history[tId] = [];
+            history[tId].push(data);
+            localStorage.setItem('t_history', JSON.stringify(history));
+            
+            // Если чат открыт — рисуем
+            if (activeId === tId) {
+                drawMsg(data.sender, data.text);
+            } else {
+                // Если закрыт — ставим уведомление
+                const dot = document.getElementById('dot-'+tId);
+                if(dot) dot.style.display = 'block';
+            }
+        }
+    });
+
+    // --- ЛОГИКА ИНТЕРФЕЙСА ЧАТА ---
+    function addFriend() {
+        const n = prompt("Введите НИК друга:");
+        if (n && n !== myNick) {
+            const id = [myNick, n].sort().join("_"); // Уникальный ID для пары
+            if (!items.find(i => i.id === id)) {
+                saveItem({id, name: n, type: 'friend'});
+            }
+        }
+    }
+
+    function addGroup() {
+        const n = prompt("Введите название группы:");
+        if (n) {
+            const id = "group_" + n; // Уникальный ID группы
+            if (!items.find(i => i.id === id)) {
+                saveItem({id, name: n, type: 'group'});
+            }
+        }
+    }
+
+    function saveItem(item) {
+        items.push(item);
+        localStorage.setItem('t_items', JSON.stringify(items));
+        client.subscribe("tule/v5/" + item.id);
+        renderList();
+    }
+
+    function select(item) {
+        activeId = item.id;
+        document.getElementById('header-name').innerText = (item.type === 'group' ? '👥 ' : '👤 ') + item.name;
+        
+        // Показываем кнопку звонка только в личных чатах
+        document.getElementById('call-btn').style.display = item.type === 'friend' ? 'block' : 'none';
+        
+        // Убираем уведомление
+        const dot = document.getElementById('dot-'+item.id);
+        if(dot) dot.style.display = 'none';
+        
+        // Очищаем и грузим историю
+        const box = document.getElementById('messages');
+        box.innerHTML = '';
+        if(history[activeId]) {
+            history[activeId].forEach(m => drawMsg(m.sender, m.text));
+        }
+        renderList(); // Обновить выделение в списке
+    }
+
+    function send() {
+        const inp = document.getElementById('msg-input');
+        if (inp.value && activeId) {
+            // Отправляем обычное сообщение (без type)
+            client.publish("tule/v5/" + activeId, JSON.stringify({sender: myNick, text: inp.value}));
+            inp.value = '';
+        }
+    }
+
+    // ИСПРАВЛЕНО: Рисование сообщения (Ник отделен)
+    function drawMsg(s, t) {
+        const box = document.getElementById('messages');
+        const d = document.createElement('div');
+        d.className = `m ${s === myNick ? 'out' : 'in'}`;
+        
+        // МЫ ИСПОЛЬЗУЕМ <b> И <br>, ЧТОБЫ РАЗДЕЛИТЬ ТЕКСТ
+        d.innerHTML = `<b>${s}:</b>${t}`;
+        
+        box.appendChild(d);
+        box.scrollTop = box.scrollHeight; // Автопрокрутка вниз
+    }
+
+    // --- ЛОГИКА ЗВОНКОВ (WebRTC) ---
+    async function initWebRTC(toNick) {
+        try {
+            // Запрашиваем микрофон
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            // Создаем P2P соединение с STUN-сервером Google
+            peerConn = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            
+            // Добавляем наш звук в канал
+            localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
+            
+            // Обрабатываем входящий звук
+            peerConn.ontrack = e => {
+                document.getElementById('remote-audio').srcObject = e.streams[0];
+            };
+            
+            // Обмен сетевыми данными (ICE кандидаты)
+            peerConn.onicecandidate = e => {
+                if(e.candidate) {
+                    client.publish("tule/v5/"+activeId, JSON.stringify({type:'ice', candidate:e.candidate, to:toNick, sender:myNick}));
+                }
+            };
+            return true;
+        } catch (e) {
+            alert("Ошибка доступа к микрофону! Проверьте HTTPS и разрешения браузера.");
+            console.error(e);
+            return false;
+        }
+    }
+
+    async function startCall() {
+        if(!activeId || activeId.startsWith('group_')) return;
+        
+        const to = activeId.replace(myNick,'').replace('_',''); // Находим ник друга
+        document.getElementById('call-ui').style.display = 'flex';
+        document.getElementById('call-status').innerText = "Вызов " + to + "...";
+        
+        if (await initWebRTC(to)) {
+            const offer = await peerConn.createOffer();
+            await peerConn.setLocalDescription(offer);
+            // Отправляем предложение (offer)
+            client.publish("tule/v5/"+activeId, JSON.stringify({type:'offer', offer, to, sender:myNick}));
+        } else {
+            endCall();
+        }
+    }
+
+    async function acceptCall(offer, topicId, sender) {
+        document.getElementById('call-ui').style.display = 'flex';
+        document.getElementById('call-status').innerText = "Соединение с " + sender + "...";
+        
+        if (await initWebRTC(sender)) {
+            await peerConn.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConn.createAnswer();
+            await peerConn.setLocalDescription(answer);
+            // Отправляем ответ (answer)
+            client.publish("tule/v5/"+topicId, JSON.stringify({type:'answer', answer, to:sender, sender:myNick}));
+            document.getElementById('call-status').innerText = "В разговоре с " + sender;
+        } else {
+            endCall();
+        }
+    }
+
+    function endCall() {
+        // Просто перезагружаем страницу, это самый надежный способ сбросить WebRTC
+        location.reload(); 
+    }
+
+    // --- ОТРИСОВКА СПИСКА КОНТАКТОВ ---
+    function renderList() {
+        const c = document.getElementById('contact-list');
+        c.innerHTML = '';
+        items.forEach(i => {
+            const d = document.createElement('div');
+            d.className = `item ${activeId === i.id ? 'active' : ''}`;
+            d.innerHTML = `<span>${(i.type==='group'?'👥 ':'👤 ')+i.name}</span><div class="unread" id="dot-${i.id}"></div>`;
+            d.onclick = () => select(i);
+            c.appendChild(d);
+        });
+    }
+
+    renderList();
+</script>
+
+</body>
+</html>
